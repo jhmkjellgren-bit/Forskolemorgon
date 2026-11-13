@@ -31,7 +31,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SKOLMATEN_TOKEN: ${{ secrets.SKOLMATEN_TOKEN }}
           SKOLMATEN_SKOLA: ${{ secrets.SKOLMATEN_SKOLA }}
-        run: python skript/uppdatera.py
+        run: python script/uppdatera.py
       - name: Spara
         run: |
           git config user.name "morgonskarm"
