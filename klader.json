@@ -1,0 +1,12 @@
+[
+  { "namn": "Regnställ", "regel": "regn" },
+  { "namn": "Gummistövlar", "regel": "regn" },
+  { "namn": "Mössa", "regel": "under", "varde": 10 },
+  { "namn": "Vantar", "regel": "under", "varde": 8 },
+  { "namn": "Fleece eller ullunderställ", "regel": "under", "varde": 5 },
+  { "namn": "Buff", "regel": "under", "varde": 5 },
+  { "namn": "Vinteroverall", "regel": "under", "varde": 0 },
+  { "namn": "Extra vantar till ombytet", "regel": "regn" },
+  { "namn": "Solhatt", "regel": "over", "varde": 18 },
+  { "namn": "Kolla ombyteslådan", "regel": "alltid" }
+]
