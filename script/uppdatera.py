@@ -76,10 +76,12 @@ def tolka_smhi(svar):
         if isinstance(rad.get("data"), dict):  # snow1g
             d = rad["data"]
             v = {"t": d.get("air_temperature"), "p": d.get("precipitation_amount_mean", 0),
-                 "w": d.get("wind_speed"), "s": d.get("symbol_code")}
+                 "w": d.get("wind_speed"), "s": d.get("symbol_code"),
+                 "d": d.get("wind_from_direction"), "g": d.get("wind_speed_of_gust")}
         else:  # pmp3g
             p = {x["name"]: x["values"][0] for x in rad.get("parameters", [])}
-            v = {"t": p.get("t"), "p": p.get("pmean", 0), "w": p.get("ws"), "s": p.get("Wsymb2")}
+            v = {"t": p.get("t"), "p": p.get("pmean", 0), "w": p.get("ws"), "s": p.get("Wsymb2"),
+                 "d": p.get("wd"), "g": p.get("gust")}
         if v["t"] is None:
             continue
         ut.append((t, v))
@@ -105,7 +107,9 @@ def hamta_vader(lat, lon, dag):
         lok = t.astimezone(TZ)
         if lok.date() == dag and 6 <= lok.hour <= 19:
             timmar.append({"h": lok.hour, "t": round(float(v["t"]), 1), "p": round(float(v["p"] or 0), 1),
-                           "w": round(float(v["w"] or 0), 1), "s": int(v["s"] or 0)})
+                           "w": round(float(v["w"] or 0), 1), "s": int(v["s"] or 0),
+                           "d": None if v.get("d") is None else int(float(v["d"])),
+                           "g": None if v.get("g") is None else round(float(v["g"]), 1)})
     return timmar or None
 
 
@@ -441,7 +445,6 @@ def las_barn(s):
 
 def main():
     inst = json.loads((ROT / "installningar.json").read_text(encoding="utf-8"))
-    klader = json.loads((ROT / "klader.json").read_text(encoding="utf-8"))
     barn = las_barn(os.environ.get("BARN"))
     if not barn:
         logg("OBS: hemligheten BARN saknas eller har fel format. Exempel: Ella=Tryggheten Rosa;Nils=Viljan Gul")
@@ -486,9 +489,10 @@ def main():
             fel.append("matsedel"); logg("Matsedel (PDF):", e)
 
     innehall = {
-        "dag": dagtext(dag, etikett), "datum": dag.isoformat(), "hamtad": nu.strftime("%-d/%-m %H:%M"),
+        "dag": dagtext(dag, etikett), "datum": dag.isoformat(),
+        "relativ": etikett.lower() if etikett else "på " + VECKODAGAR[dag.weekday()], "hamtad": nu.strftime("%-d/%-m %H:%M"),
         "barn": [b["namn"] for b in barn], "lamning": inst["lamning"], "hamtning": inst["hamtning"],
-        "timmar": timmar, "klader": klader, "unikum": unikum, "matsedel": matsedel, "fel": fel,
+        "timmar": timmar, "unikum": unikum, "matsedel": matsedel, "fel": fel,
     }
     losen = os.environ.get("SIDANS_LOSENORD")
     if not losen:
