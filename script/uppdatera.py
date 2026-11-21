@@ -150,7 +150,7 @@ def barn_for(grupper, barn):
     return traffar
 
 
-def hamta_unikum(adress, losen, barn, dagar=7):
+def hamta_unikum(adress, losen, barn, dagar=14):
     m = imaplib.IMAP4_SSL("imap.gmail.com")
     m.login(adress, losen)
     mapp = _allmail_mapp(m)
@@ -160,9 +160,10 @@ def hamta_unikum(adress, losen, barn, dagar=7):
         m.select(mapp, readonly=True)
     logg(f"Gmail: läser mappen {mapp}")
     # Matchar både automatiskt vidarebefordrade (avsändare unikum.net) och manuellt vidarebefordrade ("via Unikum" i texten).
-    typ, data = m.search(None, "X-GM-RAW", f'"(from:unikum.net OR \\"via Unikum\\") newer_than:{dagar}d"')
+    # Bred sökning (även manuellt vidarebefordrade mejl där du själv står som avsändare). Skriptet sorterar ut riktiga inlägg nedan.
+    typ, data = m.search(None, "X-GM-RAW", f'"unikum -filename:pdf newer_than:{dagar}d"')
     ids = data[0].split() if typ == "OK" and data and data[0] else []
-    ut, utanfor = [], 0
+    ut, utanfor, ej_inlagg = [], 0, 0
     for i in ids[-30:]:
         typ, d = m.fetch(i, "(RFC822)")
         if typ != "OK":
@@ -175,6 +176,9 @@ def hamta_unikum(adress, losen, barn, dagar=7):
         except Exception:  # noqa: BLE001
             datum = dt.datetime.now(TZ)
         grupper, kropp = tolka_unikum(rubrik, text_ur_mejl(msg))
+        if not grupper:
+            ej_inlagg += 1
+            continue  # nämner Unikum men är inget Unikum-inlägg
         vem = barn_for(grupper, barn)
         if not vem:
             utanfor += 1
@@ -182,7 +186,7 @@ def hamta_unikum(adress, losen, barn, dagar=7):
         ut.append({"id": msg.get("Message-ID", str(i)), "rubrik": rubrik, "datum": datum.isoformat(),
                    "grupper": grupper, "barn": vem, "text": kropp[:3000]})
     m.logout()
-    logg(f"Unikum: {len(ids)} mejl hittade i Gmail senaste {dagar} dagarna, {utanfor} gällde andra grupper, "
+    logg(f"Unikum: {len(ids)} mejl nämner Unikum senaste {dagar} dagarna, {ej_inlagg} var inga inlägg, {utanfor} gällde andra grupper, "
          f"{len(barn)} barn inlagda i BARN")
     ut.sort(key=lambda x: x["datum"], reverse=True)
     return ut
@@ -296,8 +300,9 @@ def tolka_meny_text(text, dag):
     meny, vecka, aktuell, ratter = {}, None, None, []
 
     def spara():
+        ratter[:] = [r for r in ratter if not re.fullmatch(r"menyn saknas\.?", r, re.I)]
         if aktuell and ratter:
-            meny[aktuell] = " / ".join(dict.fromkeys(ratter))[:200]
+            meny[aktuell] = " ".join(dict.fromkeys(ratter))[:200]
 
     for rad in (r.strip() for r in text.replace("\r", "").split("\n")):
         if not rad:
@@ -339,10 +344,18 @@ def tolka_meny_text(text, dag):
 
 
 def pdf_text(data):
+    """Läser PDF:en kolumn för kolumn (skolmatens utskrift har två veckor bredvid varandra)."""
     import io
+    import logging
     import pdfplumber  # installeras i workflow-filen
+    logging.getLogger("pdfminer").setLevel(logging.ERROR)
+    delar = []
     with pdfplumber.open(io.BytesIO(data)) as pdf:
-        return "\n".join((sida.extract_text() or "") for sida in pdf.pages)
+        for sida in pdf.pages:
+            mitt = sida.width / 2
+            for box in ((0, 0, mitt, sida.height), (mitt, 0, sida.width, sida.height)):
+                delar.append(sida.crop(box).extract_text() or "")
+    return "\n".join(delar)
 
 
 def ai_meny(text, dag, nyckel, modell):
