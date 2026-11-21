@@ -123,21 +123,29 @@ def text_ur_mejl(msg):
     return html.unescape(re.sub(r"<[^>]+>", "", h))
 
 
+def _norm(t):
+    return re.sub(r"\s+", " ", (t or "").replace("\xa0", " ")).strip().lower()
+
+
 def tolka_unikum(rubrik, text):
     """Plockar ut grupprad och själva inlägget ur ett Unikum-mejl."""
-    rader = [r.strip() for r in text.replace("\r", "").split("\n")]
-    rader = [r for r in rader if r and r != "[bild]" and not r.startswith("[image")]
-    # Vidarebefordrade mejl kan ha en rubrikrad överst; hoppa till efter rubriken om den finns.
+    rader = [r.strip().lstrip(">").strip() for r in text.replace("\r", "").split("\n")]
     grupper, start = "", 0
     for i, r in enumerate(rader):
         if r.startswith("Från ") and " till " in r:
-            grupper, start = r, i + 1
+            # Långa grupprader bryts ofta i vidarebefordrade mejl: ta med fortsättningen fram till nästa tomrad.
+            delar, j = [r], i + 1
+            while j < len(rader) and rader[j] and not re.match(r"(hej|hejsan|hallå)\b", rader[j], re.I):
+                delar.append(rader[j])
+                j += 1
+            grupper, start = " ".join(delar), j
             break
     kropp = []
     for r in rader[start:]:
         if r.startswith("Ser inlägget konstigt ut") or r.startswith("Detta mail skickades"):
             break
-        kropp.append(r)
+        if r and r != "[bild]" and not r.startswith("[image"):
+            kropp.append(r)
     if kropp and kropp[0] == rubrik:
         kropp = kropp[1:]
     return grupper, "\n".join(kropp).strip()
@@ -146,8 +154,8 @@ def tolka_unikum(rubrik, text):
 def barn_for(grupper, barn):
     if not grupper:
         return [b["namn"] for b in barn]
-    traffar = [b["namn"] for b in barn if b["grupp"].lower() in grupper.lower()]
-    return traffar
+    g = _norm(grupper)
+    return [b["namn"] for b in barn if _norm(b["grupp"]) and _norm(b["grupp"]) in g]
 
 
 def hamta_unikum(adress, losen, barn, dagar=14):
@@ -164,6 +172,7 @@ def hamta_unikum(adress, losen, barn, dagar=14):
     typ, data = m.search(None, "X-GM-RAW", f'"unikum -filename:pdf newer_than:{dagar}d"')
     ids = data[0].split() if typ == "OK" and data and data[0] else []
     ut, utanfor, ej_inlagg = [], 0, 0
+    traff_per_barn = [0] * len(barn)
     for i in ids[-30:]:
         typ, d = m.fetch(i, "(RFC822)")
         if typ != "OK":
@@ -180,6 +189,9 @@ def hamta_unikum(adress, losen, barn, dagar=14):
             ej_inlagg += 1
             continue  # nämner Unikum men är inget Unikum-inlägg
         vem = barn_for(grupper, barn)
+        for k, b_ in enumerate(barn):
+            if _norm(b_["grupp"]) in _norm(grupper):
+                traff_per_barn[k] += 1
         if not vem:
             utanfor += 1
             continue  # gäller ingen av barnens grupper
@@ -188,6 +200,8 @@ def hamta_unikum(adress, losen, barn, dagar=14):
     m.logout()
     logg(f"Unikum: {len(ids)} mejl nämner Unikum senaste {dagar} dagarna, {ej_inlagg} var inga inlägg, {utanfor} gällde andra grupper, "
          f"{len(barn)} barn inlagda i BARN")
+    for k, n in enumerate(traff_per_barn):
+        logg(f"Unikum: barn {k + 1} i BARN – gruppen nämns i {n} mejl")
     ut.sort(key=lambda x: x["datum"], reverse=True)
     return ut
 
