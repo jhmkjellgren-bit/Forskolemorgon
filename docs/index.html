@@ -13,14 +13,14 @@
 <style>
 :root{
   --bg:#ECEFF2; --surface:#FFFFFF; --fg:#1C2730; --muted:#5B6A76; --line:#D5DCE2;
-  --accent:#F2BE22; --accent-ink:#2E2300; --rain:#2F6FA8; --rain-soft:#D6E5F2; --warn:#B3261E;
+  --accent:#F2BE22; --accent-ink:#2E2300; --rain:#2F6FA8; --rain-soft:#D6E5F2; --warn:#B3261E; --lila:#EFE7FB; --lila-ink:#4A2D7F; --lila-line:#DCCDF4;
   --display:"Bricolage Grotesque","Avenir Next",system-ui,sans-serif;
   --body:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
   color-scheme:light;
 }
 @media (prefers-color-scheme: dark){:root{
   --bg:#11171C; --surface:#1A232A; --fg:#E6ECF0; --muted:#97A6B2; --line:#2C3943;
-  --accent:#F2BE22; --accent-ink:#241B00; --rain:#7DB3E3; --rain-soft:#1F3446; --warn:#F2B8B5; color-scheme:dark}}
+  --accent:#F2BE22; --accent-ink:#241B00; --rain:#7DB3E3; --rain-soft:#1F3446; --warn:#F2B8B5; --lila:#2A2140; --lila-ink:#DCCBF7; --lila-line:#3D3060; color-scheme:dark}}
 *{box-sizing:border-box}
 html{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);background:var(--bg)}
 body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.5;
@@ -35,6 +35,12 @@ h2{font-size:17px}
 .brief p{margin:0;font-size:18px;line-height:1.35;font-weight:500}
 .brief p.lead{font-family:var(--display);font-size:23px;font-weight:700;line-height:1.2}
 .brief p.tank{font-weight:600}
+.brief .datum{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:14px;font-weight:600;letter-spacing:.02em;border-bottom:1px solid rgba(0,0,0,.14);padding-bottom:8px;margin-bottom:2px}
+.brief .datum .dn{font-family:var(--display);font-size:17px;font-weight:700}
+.brief .datum .nd{font-weight:500;opacity:.85}
+.namnsdag{background:var(--lila);color:var(--lila-ink);border:1px solid var(--lila-line);border-radius:12px;padding:10px 14px;display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;font-size:15px}
+.namnsdag b{font-weight:600}
+.namnsdag .nar{font-size:13px;opacity:.85}
 section.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px}
 .head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
 .src{font-size:12px;color:var(--muted)}
@@ -72,10 +78,7 @@ section.card{background:var(--surface);border:1px solid var(--line);border-radiu
 </form>
 
 <div class="wrap" id="app" hidden>
-  <header style="display:flex;flex-direction:column;gap:4px">
-    <span class="eyebrow" id="datum"></span>
-    <h1>Förskolemorgon</h1>
-  </header>
+  <header><h1>Förskolemorgon</h1></header>
 
   <div class="brief" id="brief" aria-live="polite"></div>
 
@@ -83,6 +86,8 @@ section.card{background:var(--surface);border:1px solid var(--line);border-radiu
     <div class="head"><h2>Från Unikum</h2><span class="src">senaste veckan</span></div>
     <div class="msgs" id="unikum"></div>
   </section>
+
+  <div class="namnsdag" id="namnsdag" hidden></div>
 
   <section class="card">
     <div class="head"><h2>Väder vid förskolan</h2><span class="src" id="vsrc">SMHI</span></div>
@@ -101,7 +106,11 @@ const RIKTNING=["nord","nordost","ost","sydost","syd","sydväst","väst","nordv�
 const $=id=>document.getElementById(id);
 const fmt=n=>String(Math.round(n*10)/10).replace(".",",").replace("-","−");
 const heltal=n=>{const r=Math.round(n);return (r<0?"−":"")+Math.abs(r)};
-const grader=n=>`${heltal(n)} ${Math.abs(Math.round(n))===1?"grad":"grader"}`;
+const grader=n=>`${heltal(n)}°`;
+const MAN=["jan","feb","mar","apr","maj","jun","jul","aug","sep","okt","nov","dec"];
+const DAG=["Söndag","Måndag","Tisdag","Onsdag","Torsdag","Fredag","Lördag"];
+const kortDatum=iso=>{const d=new Date(iso+"T12:00");return `${DAG[d.getDay()]} ${d.getDate()} ${MAN[d.getMonth()]}`};
+const dagarTill=(fran,till)=>Math.round((new Date(till+"T12:00")-new Date(fran+"T12:00"))/864e5);
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const kd=s=>{if(!s)return"";const d=new Date(s+"T12:00");return ["sön","mån","tis","ons","tor","fre","lör"][d.getDay()]+" "+d.getDate()+"/"+(d.getMonth()+1)};
 const KEY="forskolemorgon-pw";
@@ -146,7 +155,7 @@ function vader(d){
   const besk=dagBeskrivning(hs);
   const skiljer=Math.abs(Math.round(tL)-Math.round(tH))>=2;
   const temp=`${grader(skiljer?tL:(tL+tH)/2)} och ${besk}`;
-  const hamt=skiljer?`${grader(tH).charAt(0).toUpperCase()+grader(tH).slice(1)} vid hämtning.`:null;
+  const hamt=skiljer?`${grader(tH)} vid hämtning.`:null;
   let vind;
   if(blas.w<2)vind="Nästan vindstilla.";
   else{vind=`Vind ${Math.round(blas.w)}\u00a0m/s`+(blas.d!=null?` från ${RIKTNING[Math.round(blas.d/45)%8]}`:"");
@@ -167,13 +176,12 @@ function lunch(t){
 }
 
 function render(d){
-  $("datum").textContent=d.dag;
-  const rel=d.relativ||"";
+  const ndIdag=(d.namnsdag||[]).join(", ");
   const v=vader(d);
   const u=d.unikum||[];
   // Sammanfattningen
   const rader=[];
-  if(v){rader.push({c:"lead",t:`${rel.charAt(0).toUpperCase()+rel.slice(1)}: ${v.temp}.`});
+  if(v){rader.push({c:"lead",t:`${v.temp}.`});
     if(v.hamt)rader.push({t:v.hamt});rader.push({t:v.vind})}
   else rader.push({c:"lead",t:"Vädret saknas just nu."});
   const l=lunch(d.matsedel);
@@ -181,7 +189,18 @@ function render(d){
   u.filter(m=>m.typ==="gor").forEach(m=>rader.push({c:"tank",t:"Tänk på: "+m.kort.replace(/\.$/,"")+"."}));
   const info=u.filter(m=>m.typ!=="gor");
   if(info.length)rader.push({t:"Från Unikum: "+info.map(m=>m.rubrik).join(", ")+"."});
-  $("brief").innerHTML=rader.map(r=>`<p${r.c?` class="${r.c}"`:""}>${esc(r.t)}</p>`).join("");
+  const bev=d.bevakade_namnsdagar||[];
+  const idagNamn=bev.filter(n=>n.datum===d.datum).map(n=>n.namn);
+  if(idagNamn.length)rader.push({c:"tank",t:`${idagNamn.join(" och ")} har namnsdag!`});
+  $("brief").innerHTML=`<div class="datum"><span class="dn">${esc(kortDatum(d.datum))}</span>${ndIdag?`<span class="nd">Namnsdag: ${esc(ndIdag)}</span>`:""}</div>`+
+    rader.map(r=>`<p${r.c?` class="${r.c}"`:""}>${esc(r.t)}</p>`).join("");
+  // Lila ruta: nästa bevakade namnsdag (efter idag)
+  const nasta=bev.filter(n=>n.datum>d.datum);
+  const box=$("namnsdag");
+  if(!nasta.length){box.hidden=true}
+  else{const f=nasta[0].datum,samma=nasta.filter(n=>n.datum===f).map(n=>n.namn),om=dagarTill(d.datum,f);
+    box.hidden=false;
+    box.innerHTML=`<span>Nästa namnsdag: <b>${esc(samma.join(" och "))}</b></span><span class="nar">${esc(kortDatum(f))} · ${om===1?"om 1 dag":"om "+om+" dagar"}</span>`}
   // Unikum
   $("unikum").innerHTML=u.length?u.map(m=>`<div class="msg ${m.typ==="gor"?"gor":""}">
     <div>${m.typ==="gor"?'<span class="pill">Tänk på</span>':""}<b>${esc(m.rubrik)}</b></div>
