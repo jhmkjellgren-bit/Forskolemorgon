@@ -7,6 +7,7 @@ Körs av GitHub Actions. Hemligheter läses från miljövariabler:
   ANTHROPIC_API_KEY  (valfri)      – AI-sammanfattning av Unikum-inlägg
   SKOLMATEN_TOKEN    (valfri)      – client token från skolmaten.se
   SKOLMATEN_SKOLA    (valfri)      – t.ex. "forskolan-klavavagen"
+  NAMNSDAGAR         (valfri)      – namn att bevaka, t.ex. "Anna, Erik, Maja"
 """
 import base64
 import datetime as dt
@@ -434,6 +435,25 @@ def kryptera(obj, losen):
     return {"v": 1, "iter": PBKDF2_ITER, "salt": b(salt), "iv": b(iv), "data": b(ct)}
 
 
+def namnsdagar(dag, bevakade_text):
+    """Dagens namn och nästa namnsdag bland de bevakade namnen."""
+    lista = json.loads((ROT / "namnsdagar.json").read_text(encoding="utf-8"))["namn"]
+    idag = lista.get(dag.strftime("%m-%d"), [])
+    bevakade = [n.strip() for n in re.split(r"[,;\n]", bevakade_text or "") if n.strip()]
+    kommande = []
+    for namn in bevakade:
+        for steg in range(0, 367):
+            d = dag + dt.timedelta(days=steg)
+            traff = [x for x in lista.get(d.strftime("%m-%d"), []) if x.lower() == namn.lower()]
+            if traff:
+                kommande.append({"namn": traff[0], "datum": d.isoformat()})
+                break
+        else:
+            logg(f"Namnsdag: hittade inget datum för namn nr {bevakade.index(namn) + 1} – stavning?")
+    kommande.sort(key=lambda x: x["datum"])
+    return idag, kommande
+
+
 def las_barn(s):
     barn = []
     for del_ in (s or "").split(";"):
@@ -488,11 +508,17 @@ def main():
         except Exception as e:  # noqa: BLE001
             fel.append("matsedel"); logg("Matsedel (PDF):", e)
 
+    namn_idag, namn_kommande = [], []
+    try:
+        namn_idag, namn_kommande = namnsdagar(dag, os.environ.get("NAMNSDAGAR"))
+    except Exception as e:  # noqa: BLE001
+        logg("Namnsdagar:", e)
+
     innehall = {
         "dag": dagtext(dag, etikett), "datum": dag.isoformat(),
         "relativ": etikett.lower() if etikett else "på " + VECKODAGAR[dag.weekday()], "hamtad": nu.strftime("%-d/%-m %H:%M"),
         "barn": [b["namn"] for b in barn], "lamning": inst["lamning"], "hamtning": inst["hamtning"],
-        "timmar": timmar, "unikum": unikum, "matsedel": matsedel, "fel": fel,
+        "timmar": timmar, "namnsdag": namn_idag, "bevakade_namnsdagar": namn_kommande, "unikum": unikum, "matsedel": matsedel, "fel": fel,
     }
     losen = os.environ.get("SIDANS_LOSENORD")
     if not losen:
