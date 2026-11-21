@@ -50,11 +50,12 @@ def maldag(nu):
     d += dt.timedelta(days=1)
     while d.weekday() >= 5:
         d += dt.timedelta(days=1)
-    return d, ("Imorgon" if d == nu.date() + dt.timedelta(days=1) else VECKODAGAR[d.weekday()].capitalize())
+    return d, ("Imorgon" if d == nu.date() + dt.timedelta(days=1) else "")
 
 
 def dagtext(d, etikett):
-    return f"{etikett} · {VECKODAGAR[d.weekday()]} {d.day} {MANADER[d.month - 1]}"
+    dagnamn = f"{VECKODAGAR[d.weekday()]} {d.day} {MANADER[d.month - 1]}"
+    return f"{etikett} · {dagnamn}" if etikett else dagnamn.capitalize()
 
 
 # ---------- Väder från SMHI ----------
@@ -152,10 +153,16 @@ def barn_for(grupper, barn):
 def hamta_unikum(adress, losen, barn, dagar=7):
     m = imaplib.IMAP4_SSL("imap.gmail.com")
     m.login(adress, losen)
-    m.select('"[Gmail]/All Mail"', readonly=True) if _har_allmail(m) else m.select("INBOX", readonly=True)
-    typ, data = m.search(None, "X-GM-RAW", f'"from:unikum.net newer_than:{dagar}d"')
+    mapp = _allmail_mapp(m)
+    typ, _ = m.select(mapp, readonly=True)
+    if typ != "OK":
+        mapp = "INBOX"
+        m.select(mapp, readonly=True)
+    logg(f"Gmail: läser mappen {mapp}")
+    # Matchar både automatiskt vidarebefordrade (avsändare unikum.net) och manuellt vidarebefordrade ("via Unikum" i texten).
+    typ, data = m.search(None, "X-GM-RAW", f'"(from:unikum.net OR \\"via Unikum\\") newer_than:{dagar}d"')
     ids = data[0].split() if typ == "OK" and data and data[0] else []
-    ut = []
+    ut, utanfor = [], 0
     for i in ids[-30:]:
         typ, d = m.fetch(i, "(RFC822)")
         if typ != "OK":
@@ -170,20 +177,29 @@ def hamta_unikum(adress, losen, barn, dagar=7):
         grupper, kropp = tolka_unikum(rubrik, text_ur_mejl(msg))
         vem = barn_for(grupper, barn)
         if not vem:
+            utanfor += 1
             continue  # gäller ingen av barnens grupper
         ut.append({"id": msg.get("Message-ID", str(i)), "rubrik": rubrik, "datum": datum.isoformat(),
                    "grupper": grupper, "barn": vem, "text": kropp[:3000]})
     m.logout()
+    logg(f"Unikum: {len(ids)} mejl hittade i Gmail senaste {dagar} dagarna, {utanfor} gällde andra grupper, "
+         f"{len(barn)} barn inlagda i BARN")
     ut.sort(key=lambda x: x["datum"], reverse=True)
     return ut
 
 
-def _har_allmail(m):
+def _allmail_mapp(m):
+    """Hittar Gmails 'Alla mejl'-mapp via flaggan \\All, oavsett språk på kontot."""
     try:
         typ, lst = m.list()
-        return typ == "OK" and any(b"All Mail" in x or b"Alla mejl" in x for x in lst)
+        for rad in lst if typ == "OK" else []:
+            r = rad.decode("utf-8", "replace")
+            if "\\All" in r:
+                namn = r.rsplit(' "/" ', 1)[-1].strip()
+                return namn if namn.startswith('"') else f'"{namn}"'
     except Exception:  # noqa: BLE001
-        return False
+        pass
+    return "INBOX"
 
 
 # ---------- AI-sammanfattning ----------
@@ -210,13 +226,22 @@ def ai_sammanfatta(inlagg, dag, nyckel, modell):
     return {x["id"]: x for x in json.loads(text).get("inlagg", [])}
 
 
+def forsta_mening(text):
+    """Utan AI: första riktiga raden, utan hälsningsfras, max 110 tecken."""
+    rader = [r.strip() for r in (text or "").split("\n") if r.strip()]
+    rader = [r for r in rader if not re.fullmatch(r"(hej|hejsan|hallå|god morgon)\b.{0,25}[,!.]?", r, re.I)]
+    t = " ".join(rader)
+    t = re.sub(r"https?://\S+", "", t).strip()
+    return (t[:107] + "…") if len(t) > 110 else t
+
+
 def valj_inlagg(inlagg, ai, dag):
     """Behåll det som är relevant för måldagen."""
     ut = []
     for x in inlagg:
         a = ai.get(x["id"], {}) if ai else {}
         typ = a.get("typ", "info")
-        kort = a.get("kort") or (x["text"].split("\n")[0][:110] if x["text"] else x["rubrik"])
+        kort = a.get("kort") or forsta_mening(x["text"]) or x["rubrik"]
         galler = a.get("galler_datum")
         skickat = dt.date.fromisoformat(x["datum"][:10])
         if galler:
@@ -226,7 +251,7 @@ def valj_inlagg(inlagg, ai, dag):
                     continue
             except ValueError:
                 galler = None
-        if not galler and (dag - skickat).days > (5 if typ == "gor" else 2):
+        if not galler and (dag - skickat).days > 7:
             continue
         ut.append({"rubrik": x["rubrik"], "kort": kort, "typ": typ, "barn": x["barn"],
                    "galler_datum": galler, "skickat": x["datum"][:10]})
@@ -245,6 +270,127 @@ def hamta_matsedel(token, skola, dag):
             ratter = [m.get("name", "").strip() for m in d.get("Meals", []) if m.get("name")]
             return " / ".join(ratter) or None
     logg("Matsedel: hittade ingen dag som matchar", dag, "– fält i svaret:", list(svar)[:10])
+    return None
+
+
+# ---------- Matsedel från PDF som mejlats till Gmail-kontot ----------
+VARDAGAR = ["måndag", "tisdag", "onsdag", "torsdag", "fredag"]
+MAN_KORT = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "maj": 5, "jun": 6, "jul": 7, "aug": 8,
+            "sep": 9, "okt": 10, "nov": 11, "dec": 12}
+SKRAP = re.compile(r"(skolmaten|sida \d|page \d|www\.|https?://|^vecka|^v\.? ?\d|^\d+ ?/ ?\d+$|^[\d\s.,/-]+$)", re.I)
+
+
+def _ar_for(manad_eller_vecka, dag, vecka=False):
+    """Gissa år när PDF:en inte anger det (hanterar årsskiftet)."""
+    ref = dag.isocalendar()[1] if vecka else dag.month
+    spann = 26 if vecka else 6
+    if manad_eller_vecka < ref - spann:
+        return dag.year + 1
+    if manad_eller_vecka > ref + spann:
+        return dag.year - 1
+    return dag.year
+
+
+def tolka_meny_text(text, dag):
+    """Returnerar {datum: 'rätt / rätt'} ur texten i en utskriven skolmaten-meny."""
+    meny, vecka, aktuell, ratter = {}, None, None, []
+
+    def spara():
+        if aktuell and ratter:
+            meny[aktuell] = " / ".join(dict.fromkeys(ratter))[:200]
+
+    for rad in (r.strip() for r in text.replace("\r", "").split("\n")):
+        if not rad:
+            continue
+        mv = re.search(r"\b(?:vecka|v\.?)\s*(\d{1,2})\b", rad, re.I)
+        md = re.match(r"^(måndag|tisdag|onsdag|torsdag|fredag|mån|tis|ons|tor|fre)\b[\s.,:-]*(.*)$", rad, re.I)
+        if md:
+            spara()
+            ratter = []
+            wd = next(i for i, n in enumerate(VARDAGAR) if n.startswith(md.group(1).lower()[:3]))
+            rest = md.group(2)
+            aktuell = None
+            iso = re.search(r"(\d{4})-(\d{2})-(\d{2})", rest)
+            dm = re.search(r"(\d{1,2})\s*(?:/\s*(\d{1,2})|\s+([a-zåäö]{3})[a-zåäö]*\.?)", rest, re.I)
+            try:
+                if iso:
+                    aktuell = dt.date(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)))
+                    rest = rest.replace(iso.group(0), "")
+                elif dm and (dm.group(2) or (dm.group(3) or "").lower()[:3] in MAN_KORT):
+                    manad = int(dm.group(2)) if dm.group(2) else MAN_KORT[dm.group(3).lower()[:3]]
+                    aktuell = dt.date(_ar_for(manad, dag), manad, int(dm.group(1)))
+                    rest = rest.replace(dm.group(0), "")
+                elif vecka:
+                    aktuell = dt.date.fromisocalendar(_ar_for(vecka, dag, vecka=True), vecka, wd + 1)
+            except ValueError:
+                aktuell = None
+            rest = rest.strip(" -–:,.")
+            if rest and not SKRAP.search(rest):
+                ratter.append(rest)
+            continue
+        if mv and len(rad) < 40:
+            spara()
+            vecka, aktuell, ratter = int(mv.group(1)), None, []
+            continue
+        if aktuell and not SKRAP.search(rad) and len(ratter) < 3:
+            ratter.append(rad)
+    spara()
+    return meny
+
+
+def pdf_text(data):
+    import io
+    import pdfplumber  # installeras i workflow-filen
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        return "\n".join((sida.extract_text() or "") for sida in pdf.pages)
+
+
+def ai_meny(text, dag, nyckel, modell):
+    fraga = (f"Här är texten ur en matsedel för en förskola. Vilken lunch serveras {VECKODAGAR[dag.weekday()]} {dag.isoformat()}? "
+             "Svara ENDAST med rätten/rätterna på en rad, eller med ordet SAKNAS om dagen inte finns i menyn.\n\n" + text[:12000])
+    kropp = json.dumps({"model": modell, "max_tokens": 200, "messages": [{"role": "user", "content": fraga}]}).encode()
+    req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=kropp, method="POST", headers={
+        "x-api-key": nyckel, "anthropic-version": "2023-06-01", "content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        svar = json.loads(r.read().decode())
+    t = "".join(b.get("text", "") for b in svar.get("content", [])).strip()
+    return None if not t or "SAKNAS" in t.upper() else t[:200]
+
+
+def hamta_matsedel_pdf(adress, losen, dag, ai_nyckel=None, modell=None):
+    m = imaplib.IMAP4_SSL("imap.gmail.com")
+    m.login(adress, losen)
+    mapp = _allmail_mapp(m)
+    if m.select(mapp, readonly=True)[0] != "OK":
+        m.select("INBOX", readonly=True)
+    q = '"(subject:skolmat OR subject:skolmaten OR subject:meny OR subject:matsedel) filename:pdf newer_than:60d"'
+    typ, data = m.search(None, "X-GM-RAW", q)
+    ids = data[0].split() if typ == "OK" and data and data[0] else []
+    logg(f"Matsedel: {len(ids)} mejl med meny-PDF senaste 60 dagarna")
+    for i in reversed(ids[-5:]):  # nyaste först
+        typ, d = m.fetch(i, "(RFC822)")
+        if typ != "OK":
+            continue
+        msg = email.message_from_bytes(d[0][1], policy=email.policy.default)
+        for del_ in msg.iter_attachments():
+            namn = (del_.get_filename() or "").lower()
+            if del_.get_content_type() != "application/pdf" and not namn.endswith(".pdf"):
+                continue
+            text = pdf_text(del_.get_payload(decode=True))
+            meny = tolka_meny_text(text, dag)
+            veckor = sorted({x.isocalendar()[1] for x in meny})
+            logg(f"Matsedel: PDF med {len(text)} tecken, {len(meny)} dagar tolkade (vecka {veckor or '–'})")
+            if dag in meny:
+                m.logout()
+                return meny[dag]
+            if ai_nyckel:
+                svar = ai_meny(text, dag, ai_nyckel, modell)
+                if svar:
+                    logg("Matsedel: dagen hittades med AI")
+                    m.logout()
+                    return svar
+    m.logout()
+    logg(f"Matsedel: {dag} finns inte i någon PDF – dags att mejla en ny meny?")
     return None
 
 
@@ -270,6 +416,8 @@ def main():
     inst = json.loads((ROT / "installningar.json").read_text(encoding="utf-8"))
     klader = json.loads((ROT / "klader.json").read_text(encoding="utf-8"))
     barn = las_barn(os.environ.get("BARN"))
+    if not barn:
+        logg("OBS: hemligheten BARN saknas eller har fel format. Exempel: Ella=Tryggheten Rosa;Nils=Viljan Gul")
     nu = dt.datetime.now(TZ)
     dag, etikett = maldag(nu)
     fel = []
@@ -284,7 +432,7 @@ def main():
     if os.environ.get("GMAIL_ADRESS") and os.environ.get("GMAIL_APPLOSENORD"):
         try:
             rå = hamta_unikum(os.environ["GMAIL_ADRESS"], os.environ["GMAIL_APPLOSENORD"].replace(" ", ""), barn)
-            logg(f"Unikum: {len(rå)} inlägg för barnens grupper senaste veckan")
+            logg(f"Unikum: {len(rå)} inlägg för barnens grupper")
             ai = None
             if rå and os.environ.get("ANTHROPIC_API_KEY"):
                 try:
@@ -301,6 +449,14 @@ def main():
             matsedel = hamta_matsedel(os.environ["SKOLMATEN_TOKEN"], os.environ["SKOLMATEN_SKOLA"], dag)
         except Exception as e:  # noqa: BLE001
             fel.append("matsedel"); logg("Matsedel:", e)
+    if not matsedel and os.environ.get("GMAIL_ADRESS") and os.environ.get("GMAIL_APPLOSENORD"):
+        try:
+            matsedel = hamta_matsedel_pdf(os.environ["GMAIL_ADRESS"], os.environ["GMAIL_APPLOSENORD"].replace(" ", ""), dag,
+                                          os.environ.get("ANTHROPIC_API_KEY"), inst.get("ai_modell", "claude-haiku-4-5"))
+        except ImportError:
+            fel.append("matsedel"); logg("Matsedel: pdfplumber saknas – lägg till den på pip install-raden i workflow-filen")
+        except Exception as e:  # noqa: BLE001
+            fel.append("matsedel"); logg("Matsedel (PDF):", e)
 
     innehall = {
         "dag": dagtext(dag, etikett), "datum": dag.isoformat(), "hamtad": nu.strftime("%-d/%-m %H:%M"),
