@@ -176,7 +176,6 @@ function lunch(t){
 }
 
 function render(d){
-  const ndIdag=(d.namnsdag||[]).join(", ");
   const v=vader(d);
   const u=d.unikum||[];
   // Sammanfattningen
@@ -192,7 +191,7 @@ function render(d){
   const bev=d.bevakade_namnsdagar||[];
   const idagNamn=bev.filter(n=>n.datum===d.datum).map(n=>n.namn);
   if(idagNamn.length)rader.push({c:"tank",t:`${idagNamn.join(" och ")} har namnsdag!`});
-  $("brief").innerHTML=`<div class="datum"><span class="dn">${esc(kortDatum(d.datum))}</span>${ndIdag?`<span class="nd">Namnsdag: ${esc(ndIdag)}</span>`:""}</div>`+
+  $("brief").innerHTML=`<div class="datum"><span class="dn">${esc(kortDatum(d.datum))}</span></div>`+
     rader.map(r=>`<p${r.c?` class="${r.c}"`:""}>${esc(r.t)}</p>`).join("");
   // Lila ruta: nästa bevakade namnsdag (efter idag)
   const nasta=bev.filter(n=>n.datum>d.datum);
