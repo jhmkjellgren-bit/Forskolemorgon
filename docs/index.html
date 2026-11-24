@@ -37,6 +37,7 @@ h2{font-size:17px}
 .brief p{margin:0;font-size:18px;line-height:1.35;font-weight:500}
 .brief p.lead{font-family:var(--display);font-size:23px;font-weight:700;line-height:1.2}
 .brief p.tank{font-weight:600}
+.brief .linje{border-top:1px solid rgba(0,0,0,.18);margin-top:4px;padding-top:10px}
 .brief .datum{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:14px;font-weight:600;letter-spacing:.02em;border-bottom:1px solid rgba(0,0,0,.14);padding-bottom:8px;margin-bottom:2px}
 .brief .datum .dn{font-family:var(--display);font-size:17px;font-weight:700}
 .brief .datum .nd{font-weight:500;opacity:.85}
@@ -191,7 +192,7 @@ function render(d){
   const sorterad=[...u].sort((a,b)=>(b.tid||b.skickat||"").localeCompare(a.tid||a.skickat||""));
   const kortad=t=>{t=t.replace(/\s+/g," ").trim();return t.length>140?t.slice(0,137).replace(/\s+\S*$/,"")+"…":t};
   if(sorterad.length){const m=sorterad[0];const k=kortad(m.kort).replace(/\.$/,"");
-    rader.push({c:m.typ==="gor"?"tank":"",t:`Unikum ${kd(m.skickat)}: ${m.rubrik} – ${k}${k.endsWith("…")?"":"."}`})}
+    rader.push({c:(m.typ==="gor"?"tank ":"")+"linje",t:`Unikum ${kd(m.skickat)}: ${m.rubrik} – ${k}${k.endsWith("…")?"":"."}`})}
   sorterad.slice(1).filter(m=>m.typ==="gor").forEach(m=>{const k=kortad(m.kort).replace(/\.$/,"")+".";
     rader.push({c:"tank",t:/^(glöm inte|kom ihåg)/i.test(k)?k:"Tänk på: "+k})});
   const bev=d.bevakade_namnsdagar||[];
