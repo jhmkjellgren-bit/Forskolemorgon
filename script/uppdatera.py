@@ -116,13 +116,29 @@ def hamta_vader(lat, lon, dag):
 
 # ---------- Unikum-mejl från Gmail ----------
 def text_ur_mejl(msg):
+    t = texter_ur_mejl(msg)
+    return t[0] if t else ""
+
+
+def texter_ur_mejl(msg):
+    """Mejlets text, först som vanlig text och sedan omgjord från HTML (Unikum skickar båda)."""
+    ut = []
     del_text = msg.get_body(preferencelist=("plain",))
     if del_text is not None:
-        return del_text.get_content()
+        try:
+            ut.append(del_text.get_content())
+        except Exception:  # noqa: BLE001
+            pass
     del_html = msg.get_body(preferencelist=("html",))
-    if del_html is None:
-        return ""
-    h = del_html.get_content()
+    if del_html is not None:
+        try:
+            ut.append(_html_till_text(del_html.get_content()))
+        except Exception:  # noqa: BLE001
+            pass
+    return [t for t in ut if t and t.strip()]
+
+
+def _html_till_text(h):
     h = re.sub(r"(?is)<(script|style).*?</\1>", "", h)
     h = re.sub(r"(?i)<br\s*/?>|</?(p|div|tr|td|th|li|ul|ol|table|tbody|section|article|header|footer|h\d)\b[^>]*>", "\n", h)
     t = html.unescape(re.sub(r"<[^>]+>", "", h))
@@ -198,13 +214,28 @@ def hamta_unikum(adress, losen, barn, dagar=14):
             datum = parsedate_to_datetime(msg.get("Date")).astimezone(TZ)
         except Exception:  # noqa: BLE001
             datum = dt.datetime.now(TZ)
-        grupper, kropp = tolka_unikum(rubrik, text_ur_mejl(msg))
+        texter = texter_ur_mejl(msg)
+        grupper, kropp, hur = "", "", ""
+        for t in texter:  # prova vanlig text först, sedan HTML-versionen
+            grupper, kropp = tolka_unikum(rubrik, t)
+            if grupper:
+                hur = "inlägg"
+                break
+        fran_unikum = "unikum.net" in str(msg.get("From", "")).lower() or any("via Unikum" in t for t in texter)
+        if not grupper and fran_unikum and texter:
+            # Inlägg direkt från Unikum där gruppraden inte gick att hitta: använd hela texten
+            # och barnens grupper om de nämns någonstans, annars gäller det båda barnen.
+            hel = max(texter, key=len)
+            _, kropp = tolka_unikum(rubrik, hel)
+            vem_i_text = [b_["namn"] for b_ in barn if _norm(b_["grupp"]) and _norm(b_["grupp"]) in _norm(hel)]
+            grupper = " ".join(b_["grupp"] for b_ in barn if b_["namn"] in vem_i_text) or "alla"
+            hur = "inlägg (utan grupprad)"
         typer = ",".join(sorted({p.get_content_type().split("/")[1] for p in msg.walk() if p.get_content_maintype() == "text"}))
-        logg(f"  mejl {datum:%d/%m %H:%M} ({typer or '?'}): {'inlägg' if grupper else 'inget inlägg'}")
+        logg(f"  mejl {datum:%d/%m %H:%M} ({typer or '?'}): {hur or 'inget inlägg'}")
         if not grupper:
             ej_inlagg += 1
             continue  # nämner Unikum men är inget Unikum-inlägg
-        vem = barn_for(grupper, barn)
+        vem = [b_["namn"] for b_ in barn] if grupper == "alla" else barn_for(grupper, barn)
         for k, b_ in enumerate(barn):
             if _norm(b_["grupp"]) in _norm(grupper):
                 traff_per_barn[k] += 1
