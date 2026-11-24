@@ -187,9 +187,13 @@ function render(d){
   else rader.push({c:"lead",t:"Vädret saknas just nu."});
   const l=lunch(d.matsedel);
   if(l)rader.push({t:`Barnen får ${l} till lunch.`});
-  u.filter(m=>m.typ==="gor").forEach(m=>rader.push({c:"tank",t:"Tänk på: "+m.kort.replace(/\.$/,"")+"."}));
-  const info=u.filter(m=>m.typ!=="gor");
-  if(info.length)rader.push({t:"Från Unikum: "+info.map(m=>m.rubrik).join(", ")+"."});
+  // Senaste Unikum-inlägget först, sedan påminnelser från äldre inlägg
+  const sorterad=[...u].sort((a,b)=>(b.tid||b.skickat||"").localeCompare(a.tid||a.skickat||""));
+  const kortad=t=>{t=t.replace(/\s+/g," ").trim();return t.length>140?t.slice(0,137).replace(/\s+\S*$/,"")+"…":t};
+  if(sorterad.length){const m=sorterad[0];const k=kortad(m.kort).replace(/\.$/,"");
+    rader.push({c:m.typ==="gor"?"tank":"",t:`Unikum ${kd(m.skickat)}: ${m.rubrik} – ${k}${k.endsWith("…")?"":"."}`})}
+  sorterad.slice(1).filter(m=>m.typ==="gor").forEach(m=>{const k=kortad(m.kort).replace(/\.$/,"")+".";
+    rader.push({c:"tank",t:/^(glöm inte|kom ihåg)/i.test(k)?k:"Tänk på: "+k})});
   const bev=d.bevakade_namnsdagar||[];
   const idagNamn=bev.filter(n=>n.datum===d.datum).map(n=>n.namn);
   if(idagNamn.length)rader.push({c:"tank",t:`${idagNamn.join(" och ")} har namnsdag!`});
@@ -203,7 +207,7 @@ function render(d){
     box.hidden=false;
     box.innerHTML=`<span>Nästa namnsdag: <b>${esc(samma.join(" och "))}</b></span><span class="nar">${esc(kortDatum(f))} · ${om===1?"om 1 dag":"om "+om+" dagar"}</span>`}
   // Unikum
-  $("unikum").innerHTML=u.length?u.map(m=>`<div class="msg ${m.typ==="gor"?"gor":""}">
+  $("unikum").innerHTML=u.length?sorterad.map(m=>`<div class="msg ${m.typ==="gor"?"gor":""}">
     <div>${m.typ==="gor"?'<span class="pill">Tänk på</span>':""}<b>${esc(m.rubrik)}</b></div>
     <span>${esc(m.kort)}</span>
     <span class="meta">${esc((m.barn||[]).join(", "))}${m.galler_datum?" · gäller "+kd(m.galler_datum):""} · skickat ${kd(m.skickat)}</span></div>`).join("")
