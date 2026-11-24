@@ -199,6 +199,8 @@ def hamta_unikum(adress, losen, barn, dagar=14):
         except Exception:  # noqa: BLE001
             datum = dt.datetime.now(TZ)
         grupper, kropp = tolka_unikum(rubrik, text_ur_mejl(msg))
+        typer = ",".join(sorted({p.get_content_type().split("/")[1] for p in msg.walk() if p.get_content_maintype() == "text"}))
+        logg(f"  mejl {datum:%d/%m %H:%M} ({typer or '?'}): {'inlägg' if grupper else 'inget inlägg'}")
         if not grupper:
             ej_inlagg += 1
             continue  # nämner Unikum men är inget Unikum-inlägg
@@ -242,7 +244,8 @@ Svara ENDAST med JSON: {"inlagg":[{"id":"...","typ":"gor"|"info","kort":"...","g
 - "kort": max 110 tecken på svenska, konkret, utan hälsningsfraser. Börja med det viktigaste.
 - Långa veckobrev: leta efter inbjudningar, påminnelser och datum som gömmer sig i texten (t.ex. "Glöm inte att vi på måndag bjuder in till bokcafé").
   Finns något sådant är inlägget "gor" och "kort" ska handla om just det, inte om veckans aktiviteter.
-- "galler_datum": det datum inlägget handlar om om ett sådant nämns, annars null. Tolka "på fredag" utifrån inläggets datum.
+- "galler_datum": datum för en kommande händelse eller deadline som inlägget handlar om (t.ex. bokcafé, stängt, utflykt), annars null.
+  Sätt null för allmän information utan händelse (t.ex. sjukdom på förskolan, veckobrev). Tolka "på fredag" utifrån inläggets datum.
 Ta med alla inlägg."""
 
 
@@ -309,8 +312,10 @@ def valj_inlagg(inlagg, ai, dag):
         if galler:
             try:
                 g = dt.date.fromisoformat(galler)
+                if g < dag and typ == "gor":
+                    continue  # händelsen har redan varit
                 if g < dag:
-                    continue
+                    galler = None  # info: visa ändå, enligt skickat-datum
             except ValueError:
                 galler = None
         if not galler and (dag - skickat).days > 7:
@@ -503,6 +508,10 @@ def las_barn(s):
 
 
 def main():
+    # Hemligheter som klistrats in med radbrytning eller mellanslag i slutet ställer annars till det.
+    for k in ("GMAIL_ADRESS", "GMAIL_APPLOSENORD", "ANTHROPIC_API_KEY", "SKOLMATEN_TOKEN", "SKOLMATEN_SKOLA", "BARN", "NAMNSDAGAR"):
+        if os.environ.get(k):
+            os.environ[k] = os.environ[k].strip()
     inst = json.loads((ROT / "installningar.json").read_text(encoding="utf-8"))
     barn = las_barn(os.environ.get("BARN"))
     if not barn:
