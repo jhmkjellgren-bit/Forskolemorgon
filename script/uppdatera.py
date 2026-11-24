@@ -269,7 +269,9 @@ def _allmail_mapp(m):
 
 # ---------- AI-sammanfattning ----------
 AI_INSTRUKTION = """Du hjälper en förälder inför förskolelämning. Nedan finns inlägg från förskolans Unikum (senaste veckan) och dagens datum.
-Svara ENDAST med JSON: {"inlagg":[{"id":"...","typ":"gor"|"info","kort":"...","galler_datum":"YYYY-MM-DD"|null}]}
+"dagens_datum" är den dag föräldern förbereder sig för (lämning den dagen).
+Svara ENDAST med JSON: {"inlagg":[{"id":"...","typ":"gor"|"info","kort":"...","galler_datum":"YYYY-MM-DD"|null}],
+ "punkter":[{"text":"...","viktig":true|false}]}
 - "gor": föräldern behöver göra, ta med eller tänka på något (ombyte, matsäck, stängt, utflykt, fotografering, ledig dag, blanketter).
 - "info": bra att veta men ingen åtgärd.
 - "kort": max 110 tecken på svenska, konkret, utan hälsningsfraser. Börja med det viktigaste.
@@ -277,7 +279,16 @@ Svara ENDAST med JSON: {"inlagg":[{"id":"...","typ":"gor"|"info","kort":"...","g
   Finns något sådant är inlägget "gor" och "kort" ska handla om just det, inte om veckans aktiviteter.
 - "galler_datum": datum för en kommande händelse eller deadline som inlägget handlar om (t.ex. bokcafé, stängt, utflykt), annars null.
   Sätt null för allmän information utan händelse (t.ex. sjukdom på förskolan, veckobrev). Tolka "på fredag" utifrån inläggets datum.
-Ta med alla inlägg."""
+Ta med alla inlägg i "inlagg".
+
+"punkter" är det som visas överst på föräldrarnas morgonskärm. Prioritera hårt:
+- Högst 3 punkter, gärna färre. Inga punkter alls om inget är aktuellt (tom lista).
+- Varje punkt max 70 tecken, en sak per punkt, skriven som en snabb notis. Ingen hälsning, ingen rubrik-upprepning.
+- Ordning: 1) något föräldern måste göra eller ta med på dagens_datum eller nästa dag, 2) stängt/ändrade tider,
+  3) pågående sjukdom eller smitta på förskolan (skickat senaste 3 dagarna), 4) kommande händelser senaste veckan.
+- Ta INTE med händelser som redan har varit före dagens_datum, och inte allmänna veckobrev utan åtgärd.
+- "viktig": true bara för sådant som kräver handling på dagens_datum eller dagen efter, eller stängt/smitta. Övrigt false.
+- Skriv datum som veckodag (t.ex. "på fredag") när det hjälper."""
 
 
 def ai_sammanfatta(inlagg, dag, nyckel, modell):
@@ -291,7 +302,10 @@ def ai_sammanfatta(inlagg, dag, nyckel, modell):
         svar = json.loads(r.read().decode())
     text = "".join(b.get("text", "") for b in svar.get("content", []))
     text = text[text.find("{"): text.rfind("}") + 1]
-    return {x["id"]: x for x in json.loads(text).get("inlagg", [])}
+    svar_json = json.loads(text)
+    punkter = [{"text": str(p.get("text", ""))[:90], "viktig": bool(p.get("viktig"))}
+               for p in svar_json.get("punkter", []) if p.get("text")][:3]
+    return {x["id"]: x for x in svar_json.get("inlagg", [])}, punkter
 
 
 def forsta_mening(text):
@@ -557,7 +571,7 @@ def main():
     except Exception as e:  # noqa: BLE001
         fel.append("vader"); logg("Väder:", e)
 
-    unikum = []
+    unikum, punkter = [], None
     if os.environ.get("GMAIL_ADRESS") and os.environ.get("GMAIL_APPLOSENORD"):
         try:
             rå = hamta_unikum(os.environ["GMAIL_ADRESS"], os.environ["GMAIL_APPLOSENORD"].replace(" ", ""), barn)
@@ -567,8 +581,8 @@ def main():
                 logg("AI: ingen ANTHROPIC_API_KEY – använder enkel tolkning")
             if rå and os.environ.get("ANTHROPIC_API_KEY"):
                 try:
-                    ai = ai_sammanfatta(rå, dag, os.environ["ANTHROPIC_API_KEY"], inst.get("ai_modell", "claude-haiku-4-5"))
-                    logg(f"AI: {len(ai)} av {len(rå)} Unikum-inlägg tolkade")
+                    ai, punkter = ai_sammanfatta(rå, dag, os.environ["ANTHROPIC_API_KEY"], inst.get("ai_modell", "claude-haiku-4-5"))
+                    logg(f"AI: {len(ai)} av {len(rå)} Unikum-inlägg tolkade, {len(punkter)} punkter till gula rutan")
                 except Exception as e:  # noqa: BLE001
                     fel.append("ai"); logg("AI:", e)
             unikum = valj_inlagg(rå, ai, dag)
@@ -600,7 +614,7 @@ def main():
         "dag": dagtext(dag, etikett), "datum": dag.isoformat(),
         "relativ": etikett.lower() if etikett else "på " + VECKODAGAR[dag.weekday()], "hamtad": nu.strftime("%-d/%-m %H:%M"),
         "barn": [b["namn"] for b in barn], "lamning": inst["lamning"], "hamtning": inst["hamtning"],
-        "timmar": timmar, "namnsdag": namn_idag, "bevakade_namnsdagar": namn_kommande, "unikum": unikum, "matsedel": matsedel, "fel": fel,
+        "timmar": timmar, "namnsdag": namn_idag, "bevakade_namnsdagar": namn_kommande, "unikum": unikum, "unikum_punkter": punkter, "matsedel": matsedel, "fel": fel,
     }
     losen = os.environ.get("SIDANS_LOSENORD")
     if not losen:
