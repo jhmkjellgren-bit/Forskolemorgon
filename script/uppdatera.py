@@ -124,8 +124,9 @@ def text_ur_mejl(msg):
         return ""
     h = del_html.get_content()
     h = re.sub(r"(?is)<(script|style).*?</\1>", "", h)
-    h = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>|</h\d>", "\n", h)
-    return html.unescape(re.sub(r"<[^>]+>", "", h))
+    h = re.sub(r"(?i)<br\s*/?>|</?(p|div|tr|td|th|li|ul|ol|table|tbody|section|article|header|footer|h\d)\b[^>]*>", "\n", h)
+    t = html.unescape(re.sub(r"<[^>]+>", "", h))
+    return t.replace("\xa0", " ").replace("\u200b", "")
 
 
 def _norm(t):
@@ -137,14 +138,22 @@ def tolka_unikum(rubrik, text):
     rader = [r.strip().lstrip(">").strip() for r in text.replace("\r", "").split("\n")]
     grupper, start = "", 0
     for i, r in enumerate(rader):
-        if r.startswith("Från ") and " till " in r:
-            # Långa grupprader bryts ofta i vidarebefordrade mejl: ta med fortsättningen fram till nästa tomrad.
-            delar, j = [r], i + 1
-            while j < len(rader) and rader[j] and not re.match(r"(hej|hejsan|hallå)\b", rader[j], re.I):
+        mf = re.search(r"Från\s+.{1,80}?\s+till\s+", r)
+        if mf:
+            # Långa grupprader bryts ofta i vidarebefordrade mejl: ta med fortsättningen (korta rader utan meningar).
+            delar, j = [r[mf.start():]], i + 1
+            while (j < len(rader) and rader[j] and not re.match(r"(hej|hejsan|hallå|god ?morgon)\b", rader[j], re.I)
+                   and (delar[-1].rstrip().endswith(",") or (len(rader[j]) < 60 and not re.search(r"[.!?:]", rader[j])))):
                 delar.append(rader[j])
                 j += 1
             grupper, start = " ".join(delar), j
             break
+    if not grupper:
+        # Reserv: en tidig rad som räknar upp mottagare, t.ex. "Mentor, Personal, Barn i Viljan Gul"
+        for i, r in enumerate(rader[:15]):
+            if re.match(r"^(från\s+\S+\s+till\s+)?((vårdnadshavare|mentor|pedagoger|personal|barn)[,\s]+)+.*\bi\b", r, re.I):
+                grupper, start = r, i + 1
+                break
     kropp = []
     for r in rader[start:]:
         if r.startswith("Ser inlägget konstigt ut") or r.startswith("Detta mail skickades"):
@@ -201,7 +210,7 @@ def hamta_unikum(adress, losen, barn, dagar=14):
             utanfor += 1
             continue  # gäller ingen av barnens grupper
         ut.append({"id": msg.get("Message-ID", str(i)), "rubrik": rubrik, "datum": datum.isoformat(),
-                   "grupper": grupper, "barn": vem, "text": kropp[:3000]})
+                   "grupper": grupper, "barn": vem, "text": kropp[:9000]})
     m.logout()
     logg(f"Unikum: {len(ids)} mejl nämner Unikum senaste {dagar} dagarna, {ej_inlagg} var inga inlägg, {utanfor} gällde andra grupper, "
          f"{len(barn)} barn inlagda i BARN")
@@ -231,6 +240,8 @@ Svara ENDAST med JSON: {"inlagg":[{"id":"...","typ":"gor"|"info","kort":"...","g
 - "gor": föräldern behöver göra, ta med eller tänka på något (ombyte, matsäck, stängt, utflykt, fotografering, ledig dag, blanketter).
 - "info": bra att veta men ingen åtgärd.
 - "kort": max 110 tecken på svenska, konkret, utan hälsningsfraser. Börja med det viktigaste.
+- Långa veckobrev: leta efter inbjudningar, påminnelser och datum som gömmer sig i texten (t.ex. "Glöm inte att vi på måndag bjuder in till bokcafé").
+  Finns något sådant är inlägget "gor" och "kort" ska handla om just det, inte om veckans aktiviteter.
 - "galler_datum": det datum inlägget handlar om om ett sådant nämns, annars null. Tolka "på fredag" utifrån inläggets datum.
 Ta med alla inlägg."""
 
@@ -252,10 +263,33 @@ def ai_sammanfatta(inlagg, dag, nyckel, modell):
 def forsta_mening(text):
     """Utan AI: första riktiga raden, utan hälsningsfras, max 110 tecken."""
     rader = [r.strip() for r in (text or "").split("\n") if r.strip()]
-    rader = [r for r in rader if not re.fullmatch(r"(hej|hejsan|hallå|god morgon)\b.{0,25}[,!.]?", r, re.I)]
+    rader = [r for r in rader if not re.fullmatch(r"(hej|hejsan|hallå|god ?morgon)\b.{0,25}[,!.]?", r, re.I)]
     t = " ".join(rader)
+    t = re.sub(r"^(hej|hejsan|hallå|god ?morgon)[^,.!]{0,20}[,!.]\s*", "", t, flags=re.I)
+    t = t[:1].upper() + t[1:]
     t = re.sub(r"https?://\S+", "", t).strip()
     return (t[:107] + "…") if len(t) > 110 else t
+
+
+STARK = re.compile(r"\b(glöm inte|kom ihåg|bjuder in|välkomna? (till|på)|anmäl|senast|stängt|stänger|planeringsdag|"
+                   r"studiedag|fotografering|föräldramöte|utvecklingssamtal)", re.I)
+SVAG = re.compile(r"\b(ta med|utflykt|matsäck|ombyte|lediga?|ledighet)\b", re.I)
+FRAMTID = re.compile(r"\b(imorgon|i morgon|nästa vecka|på (måndag|tisdag|onsdag|torsdag|fredag)|\d{1,2}/\d{1,2}|"
+                     r"\d{1,2} (jan|feb|mar|apr|maj|jun|jul|aug|sep|okt|nov|dec))", re.I)
+
+
+def paminnelser(text):
+    """Utan AI: meningar som ser ut som påminnelser eller inbjudningar, starkast först."""
+    meningar = re.split(r"(?<=[.!?])\s+|\n+", text or "")
+    ut = []
+    for m in meningar:
+        m = re.sub(r"\s*[:;]-?[)D(]+\s*$", "", m.strip())  # ta bort smileys
+        if not 8 < len(m) < 220:
+            continue
+        poang = (2 if STARK.search(m) else 0) + (1 if SVAG.search(m) and FRAMTID.search(m) else 0) + (1 if FRAMTID.search(m) else 0)
+        if poang >= 2:
+            ut.append((poang, m.rstrip(".!") + "."))
+    return [m for _, m in sorted(ut, key=lambda x: -x[0])]
 
 
 def valj_inlagg(inlagg, ai, dag):
@@ -264,7 +298,12 @@ def valj_inlagg(inlagg, ai, dag):
     for x in inlagg:
         a = ai.get(x["id"], {}) if ai else {}
         typ = a.get("typ", "info")
-        kort = a.get("kort") or forsta_mening(x["text"]) or x["rubrik"]
+        kort = a.get("kort")
+        if not a:
+            pam = paminnelser(x["text"])
+            if pam:
+                typ, kort = "gor", pam[0][:200]
+        kort = kort or forsta_mening(x["text"]) or x["rubrik"]
         galler = a.get("galler_datum")
         skickat = dt.date.fromisoformat(x["datum"][:10])
         if galler:
@@ -277,8 +316,8 @@ def valj_inlagg(inlagg, ai, dag):
         if not galler and (dag - skickat).days > 7:
             continue
         ut.append({"rubrik": x["rubrik"], "kort": kort, "typ": typ, "barn": x["barn"],
-                   "galler_datum": galler, "skickat": x["datum"][:10]})
-    ut.sort(key=lambda x: (x["typ"] != "gor", x["galler_datum"] or "9999"))
+                   "galler_datum": galler, "skickat": x["datum"][:10], "tid": x["datum"]})
+    ut.sort(key=lambda x: x["tid"], reverse=True)  # senaste först
     return ut[:8]
 
 
