@@ -38,6 +38,10 @@ h2{font-size:17px}
 .brief p.lead{font-family:var(--display);font-size:23px;font-weight:700;line-height:1.2}
 .brief p.tank{font-weight:600}
 .brief .linje{border-top:1px solid rgba(0,0,0,.18);margin-top:4px;padding-top:10px}
+.brief p.rad{font-size:16px;font-weight:400}
+.brief ul.punkter{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:16px;line-height:1.35}
+.brief ul.punkter li{padding-left:2px}
+.brief ul.punkter li.viktig{font-weight:700}
 .brief .datum{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:14px;font-weight:600;letter-spacing:.02em;border-bottom:1px solid rgba(0,0,0,.14);padding-bottom:8px;margin-bottom:2px}
 .brief .datum .dn{font-family:var(--display);font-size:17px;font-weight:700}
 .brief .datum .nd{font-weight:500;opacity:.85}
@@ -181,25 +185,27 @@ function lunch(t){
 function render(d){
   const v=vader(d);
   const u=d.unikum||[];
-  // Sammanfattningen
+  // Sammanfattningen: väder som rubrik, korta rader, sedan en punktlista med det viktigaste
   const rader=[];
-  if(v){rader.push({c:"lead",t:`${v.temp}.`});
-    if(v.hamt)rader.push({t:v.hamt});rader.push({t:v.vind})}
-  else rader.push({c:"lead",t:"Vädret saknas just nu."});
+  if(v){if(v.hamt)rader.push(v.hamt);rader.push(v.vind)}
   const l=lunch(d.matsedel);
-  if(l)rader.push({t:`Barnen får ${l} till lunch.`});
-  // Senaste Unikum-inlägget först, sedan påminnelser från äldre inlägg
+  if(l)rader.push(`Barnen får ${l} till lunch.`);
   const sorterad=[...u].sort((a,b)=>(b.tid||b.skickat||"").localeCompare(a.tid||a.skickat||""));
-  const kortad=t=>{t=t.replace(/\s+/g," ").trim();return t.length>140?t.slice(0,137).replace(/\s+\S*$/,"")+"…":t};
-  if(sorterad.length){const m=sorterad[0];const k=kortad(m.kort).replace(/\.$/,"");
-    rader.push({c:(m.typ==="gor"?"tank ":"")+"linje",t:`Unikum ${kd(m.skickat)}: ${m.rubrik} – ${k}${k.endsWith("…")?"":"."}`})}
-  sorterad.slice(1).filter(m=>m.typ==="gor").forEach(m=>{const k=kortad(m.kort).replace(/\.$/,"")+".";
-    rader.push({c:"tank",t:/^(glöm inte|kom ihåg)/i.test(k)?k:"Tänk på: "+k})});
+  const kortad=(t,n)=>{t=t.replace(/\s+/g," ").trim().replace(/\.$/,"");return t.length>n?t.slice(0,n-3).replace(/\s+\S*$/,"")+"…":t};
+  let punkter;
+  if(Array.isArray(d.unikum_punkter)){punkter=d.unikum_punkter.map(p=>({t:p.text,viktig:!!p.viktig}))}
+  else{ // utan AI: senaste inlägget plus påminnelser
+    punkter=[];
+    if(sorterad.length){const m=sorterad[0];punkter.push({t:`${m.rubrik}: ${kortad(m.kort,80)}`,viktig:false})}
+    sorterad.slice(1).filter(m=>m.typ==="gor").slice(0,2).forEach(m=>punkter.push({t:kortad(m.kort,80),viktig:true}));
+  }
   const bev=d.bevakade_namnsdagar||[];
   const idagNamn=bev.filter(n=>n.datum===d.datum).map(n=>n.namn);
-  if(idagNamn.length)rader.push({c:"tank",t:`${idagNamn.join(" och ")} har namnsdag!`});
+  if(idagNamn.length)punkter.push({t:`${idagNamn.join(" och ")} har namnsdag`,viktig:false});
   $("brief").innerHTML=`<div class="datum"><span class="dn">${esc(kortDatum(d.datum))}</span></div>`+
-    rader.map(r=>`<p${r.c?` class="${r.c}"`:""}>${esc(r.t)}</p>`).join("");
+    `<p class="lead">${esc(v?v.temp+".":"Vädret saknas just nu.")}</p>`+
+    rader.map(r=>`<p class="rad">${esc(r)}</p>`).join("")+
+    (punkter.length?`<ul class="punkter linje">${punkter.map(p=>`<li${p.viktig?' class="viktig"':""}>${esc(p.t)}</li>`).join("")}</ul>`:"");
   // Lila ruta: nästa bevakade namnsdag (efter idag)
   const nasta=bev.filter(n=>n.datum>d.datum);
   const box=$("namnsdag");
