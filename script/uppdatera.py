@@ -523,9 +523,12 @@ def main():
             rå = hamta_unikum(os.environ["GMAIL_ADRESS"], os.environ["GMAIL_APPLOSENORD"].replace(" ", ""), barn)
             logg(f"Unikum: {len(rå)} inlägg för barnens grupper")
             ai = None
+            if rå and not os.environ.get("ANTHROPIC_API_KEY"):
+                logg("AI: ingen ANTHROPIC_API_KEY – använder enkel tolkning")
             if rå and os.environ.get("ANTHROPIC_API_KEY"):
                 try:
                     ai = ai_sammanfatta(rå, dag, os.environ["ANTHROPIC_API_KEY"], inst.get("ai_modell", "claude-haiku-4-5"))
+                    logg(f"AI: {len(ai)} av {len(rå)} Unikum-inlägg tolkade")
                 except Exception as e:  # noqa: BLE001
                     fel.append("ai"); logg("AI:", e)
             unikum = valj_inlagg(rå, ai, dag)
